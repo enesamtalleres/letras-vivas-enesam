@@ -37,8 +37,39 @@ function reportMarkup(){return `<div class="report"><p style="text-align:center;
 function reportPage(){if(!user)return go('overview');$('#main').innerHTML=`<div class="stack"><div class="panel no-print"><h2>Informes institucionales</h2><p>Este informe administrativo incluye borradores. Revísalo antes de compartir.</p><div class="actions"><button class="btn" id="pdf">Imprimir / guardar PDF</button><button class="btn alt" id="word">Descargar Word (.doc)</button></div></div>${reportMarkup()}</div>`;$('#pdf').onclick=()=>window.print();$('#word').onclick=()=>download(new Blob(['\ufeff','<!doctype html><html><head><meta charset="utf-8"></head><body>'+reportMarkup()+'</body></html>'],{type:'application/msword'}),'Letras_Vivas_Reporte.doc')}
 function download(blob,name){const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500)}
 function settingsPage(){if(!user)return go('overview');$('#main').innerHTML=`<div class="panel"><h2>Ajustes técnicos</h2><div class="note">La creación de carpetas se ejecuta con la cuenta propietaria de Apps Script. Mantén la implementación restringida hasta conectar una validación segura de administradores. Esta URL es una preferencia guardada localmente.</div><h3>Google Drive</h3><div class="field"><label>Aplicación de Drive (/exec)</label><input id="script" value="${esc(driveUrl)}" placeholder="https://script.google.com/macros/s/.../exec"></div><button class="btn alt" id="saveScript">Guardar enlace</button><hr class="sep"><h3>Respaldo</h3><button class="btn light" id="backup">Descargar copia JSON</button><p class="inline-note">El respaldo incluye información administrativa; consérvalo en un lugar privado.</p></div>`;$('#saveScript').onclick=()=>{const u=$('#script').value.trim();if(u&&!validScript(u))return alert('Escribe una URL /exec válida.');driveUrl=u;localStorage.setItem('lv-drive-script-url',u);alert('Enlace guardado.');};$('#backup').onclick=()=>download(new Blob([JSON.stringify({identity,activities,comments},null,2)],{type:'application/json'}),'Letras_Vivas_Respaldo.json')}
-function createFolder(id){const a=activities.find(x=>x.id===id);if(!a)return;if(!validScript(driveUrl))return alert('Configura primero el enlace /exec desde Ajustes.');const qs=new URLSearchParams({activityId:a.id,title:a.titulo,date:a.fecha});window.open(driveUrl+'?'+qs.toString(),'_blank','noopener,noreferrer');alert('Al terminar en Drive, copia el enlace de la carpeta y pégalo en Editar actividad → Vincular carpeta existente. La devolución automática se incorporará cuando esté protegida y publicada la integración.');}
+function createFolder(id){
+ const a=activities.find(x=>x.id===id);
+ if(!user||!a)return;
+ if(!validScript(driveUrl))return alert('Configura primero el enlace /exec desde Ajustes.');
+ // El enlace de retorno llega a la página principal, sin parámetros anteriores.
+ const back=new URL(location.pathname,location.origin).href;
+ const qs=new URLSearchParams({activityId:a.id,title:a.titulo,date:a.fecha,returnUrl:back});
+ window.open(driveUrl+'?'+qs.toString(),'_blank','noopener,noreferrer');
+}
+async function receiveDriveReturn(){
+ const u=new URL(window.location.href);
+ const id=u.searchParams.get('lv_activity'), link=u.searchParams.get('lv_drive');
+ if(!id&&!link)return;
+ // No mantener los parámetros en historial, enlaces compartidos ni recargas.
+ history.replaceState(null,'',u.pathname+u.hash);
+ if(!id||!link||!validDrive(link))return alert('El enlace devuelto por Drive no es válido. La actividad no se modificó.');
+ if(!user){
+   alert('Para asociar el enlace, inicia sesión como administrador y vuelve a pulsar el botón «Guardar enlace y volver» en la ventana de Drive.');
+   return;
+ }
+ try {
+   const ref=doc(db,'actividades',id);
+   const snapshot=await getDoc(ref);
+   if(!snapshot.exists())return alert('No se encontró la actividad correspondiente. No se ha creado ningún registro nuevo.');
+   // Actualización parcial: conserva el resto de la actividad.
+   await setDoc(ref,{drive:link},{merge:true});
+   await load();
+   page='activities';mode='admin';render();
+   alert('Carpeta de Drive vinculada correctamente a esta actividad.');
+ } catch(err){alertError(err)}
+}
+
 function render(){if(!auth)return;if(user){mode='admin';nav();return}if(mode==='login')login();else if(mode==='visitor')nav();else home()}
 async function start(){if(firebaseConfig.apiKey.startsWith('PEGAR_')||firebaseConfig.appId.startsWith('PEGAR_')){$('#connection').textContent='Configuración pendiente';shell('<div class="panel"><h2>Falta conectar Firebase</h2><p>Abre <code>firebase-config.js</code> y copia el <b>apiKey</b> y <b>appId</b> exactos de la configuración web de tu proyecto Firebase.</p><p>Consulta la guía incluida en el ZIP.</p></div>');return}
- try{const app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);onAuthStateChanged(auth,async u=>{user=u;mode=u?'admin':'home';page='overview';await refresh()});}catch(e){alertError(e);$('#connection').textContent='Error de configuración'}}
+ try{const app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);onAuthStateChanged(auth,async u=>{user=u;mode=u?'admin':'home';page='overview';await refresh();await receiveDriveReturn()});}catch(e){alertError(e);$('#connection').textContent='Error de configuración'}}
 start();
